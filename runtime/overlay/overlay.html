@@ -1,0 +1,317 @@
+<!doctype html>
+<!--
+  overlay.html —— 置顶小窗里渲染的那一页（由宿主半侧 /overlay 路由提供）。
+  与浏览器半侧（client.js）用同一份数据契约：轮询 /state 的 {counter,data} 叶子。
+  这里刻意写成"无依赖的纯 DOM"：小窗里没有 React、也不该有构建产物。
+-->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' data: http://127.0.0.1:19387; media-src 'self' http://127.0.0.1:19387" />
+    <title>桌宠参谋</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        background: transparent;
+        overflow: hidden;
+        font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+        user-select: none;
+        cursor: default;
+      }
+      /* 整个根容器不吃鼠标；只有 #pet 命中区吃（配合 preload 的 setInteractive 切穿透） */
+      #root {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 6px;
+        padding: 6px;
+        box-sizing: border-box;
+        pointer-events: none;
+      }
+      #bubble {
+        pointer-events: none;
+        max-width: 100%;
+        box-sizing: border-box;
+        padding: 9px 12px;
+        border-radius: 13px;
+        background: rgba(20, 20, 24, 0.86);
+        color: #f4f4f6;
+        font-size: 13px;
+        line-height: 1.5;
+        box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+        opacity: 0;
+        transform: translateY(6px);
+        transition: opacity 0.22s ease, transform 0.22s ease;
+        word-break: break-word;
+      }
+      #bubble.on {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      #bubble .err {
+        margin-top: 5px;
+        font-size: 11px;
+        color: #ff9c9c;
+      }
+      /* 宠物命中区：可点、可拖，也是"这一块能不能交互"的判定范围 */
+      #pet {
+        position: relative;
+        width: 100%;
+        height: 200px; /* 固定高度：素材没加载出来也不会塌成 0（视频失败时仍占位） */
+        flex: 0 0 auto;
+        pointer-events: auto;
+        cursor: grab;
+        display: flex;
+        align-items: flex-end;
+        justify-content: center;
+      }
+      #pet.dragging {
+        cursor: grabbing;
+      }
+      #pet video {
+        display: block;
+        max-width: 100%;
+        max-height: 100%;
+        width: auto;
+        height: 100%;
+        object-fit: contain;
+        filter: drop-shadow(0 6px 12px rgba(0, 0, 0, 0.4));
+        pointer-events: none;
+        -webkit-user-drag: none;
+      }
+      #pet .placeholder {
+        width: 100%;
+        height: 100%;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.06);
+      }
+      #hidden-note {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root" hidden>
+      <div id="bubble"><div id="say"></div><div id="err" class="err" hidden></div></div>
+      <div id="pet"><video id="video" autoplay loop muted playsinline></video></div>
+    </div>
+    <div id="hidden-note"></div>
+    <script>
+      (() => {
+        const ROUTE = '/dsh-game-pet-7341';
+        const PET_ROUTE = '/dsh-pet-7340';
+        const IDLE_ANIMATION = '待机呼吸休闲';
+        const BUBBLE_MS = 14000;
+
+        const root = document.getElementById('root');
+        const bubble = document.getElementById('bubble');
+        const say = document.getElementById('say');
+        const err = document.getElementById('err');
+        const video = document.getElementById('video');
+        const pet = document.getElementById('pet');
+
+        let baseline = null;
+        let bubbleTimer = null;
+        let playing = false;
+        let animation = IDLE_ANIMATION;
+        let applyRegion = false;
+
+        // ── 悬停 → 可交互（让空白像素继续穿透，宠物身体能点能拖） ──────────
+        const setInteractive = (value) => {
+          if (!window.gp || applyRegion === value) return;
+          applyRegion = value;
+          window.gp.setInteractive(value);
+        };
+        pet.addEventListener('mouseenter', () => setInteractive(true));
+        pet.addEventListener('mouseleave', () => {
+          if (!dragging) setInteractive(false);
+        });
+
+        // ── 拖拽：按住宠物拖，宿主按屏幕坐标挪窗（不用 app-region：见 preload 注释） ──
+        // ⚠️ 拖拽期间必须 setPointerCapture：窗口跟着鼠标走的时候指针会短暂跑到窗外，
+        //    没有捕获就会触发 mouseleave / mouseup 把拖拽打断（实测抖动成 start/end 循环）。
+        const isOverPet = (event) => {
+          const rect = pet.getBoundingClientRect();
+          return (
+            event.clientX >= rect.left &&
+            event.clientX <= rect.right &&
+            event.clientY >= rect.top &&
+            event.clientY <= rect.bottom
+          );
+        };
+
+        let dragging = false;
+        pet.addEventListener('mousedown', (event) => {
+          if (event.button !== 0) return;
+          dragging = true;
+          pet.classList.add('dragging');
+          setInteractive(true);
+          try {
+            pet.setPointerCapture?.(event.pointerId);
+          } catch {
+            // 没有 pointerId 也不影响（host 端照样挪窗）
+          }
+          window.gp?.dragStart();
+          event.preventDefault();
+        });
+
+        document.addEventListener('mousemove', (event) => {
+          if (!dragging) {
+            // 悬停判定自己做：拖拽期间窗口会跟手移动，单靠 mouseenter/leave 会抖
+            setInteractive(isOverPet(event));
+            return;
+          }
+          window.gp?.dragMove();
+        });
+
+        const endDrag = () => {
+          if (!dragging) return;
+          dragging = false;
+          setInteractive(false);
+          pet.classList.remove('dragging');
+          window.gp?.dragEnd();
+        };
+        document.addEventListener('mouseup', endDrag);
+        // 只在"没在拖"的时候，指针离开窗口才收回交互
+        document.addEventListener('mouseleave', () => {
+          if (!dragging) setInteractive(false);
+        });
+
+        // ── 素材回落链：**本插件自带** → dsh-pet（仅在本地没有该素材时才试）→ 占位 ──
+        // 为什么自带排最前：dsh-pet 一旦被停用/卸载，它的整条路由就消失了，
+        // 只靠它会出现"只剩气泡、小人不见"（真踩过）。自带这 10 段就是为了不再依赖它。
+        // 为什么先看 /state 里的 bundled 清单：本地没有的动作就别去试——
+        // 否则要等 404/超时才回落，观感是"卡一下才出小人"。
+        let bundled = null; // null = 还不知道，先按"都试"处理
+        const localHas = (name) => bundled === null || bundled.includes(name);
+
+        const sources = (name) => {
+          const list = [];
+          if (localHas(name)) list.push(`${ROUTE}/anim/${encodeURIComponent(name)}.webm`);
+          list.push(`${PET_ROUTE}/thumb/main/${encodeURIComponent(name)}.webm`);
+          if (name !== IDLE_ANIMATION) {
+            if (localHas(IDLE_ANIMATION)) list.push(`${ROUTE}/anim/${encodeURIComponent(IDLE_ANIMATION)}.webm`);
+            list.push(`${PET_ROUTE}/thumb/main/${encodeURIComponent(IDLE_ANIMATION)}.webm`);
+          }
+          return list;
+        };
+        let sourceIndex = 0;
+        function loadAnimation(name) {
+          animation = name || IDLE_ANIMATION;
+          sourceIndex = 0;
+          applySource();
+        }
+        function applySource() {
+          const list = sources(animation);
+          if (sourceIndex >= list.length) {
+            video.style.display = 'none';
+            if (!pet.querySelector('.placeholder')) {
+              const box = document.createElement('div');
+              box.className = 'placeholder';
+              pet.appendChild(box);
+            }
+            return;
+          }
+          video.style.display = '';
+          video.src = list[sourceIndex];
+          video.play?.().catch(() => {});
+        }
+        video.addEventListener('error', () => {
+          sourceIndex += 1;
+          applySource();
+        });
+
+        function showBubble(data) {
+          const text = (data && data.say) || '';
+          const error = (data && data.error) || '';
+          say.textContent = text;
+          err.textContent = error;
+          err.hidden = !error;
+          bubble.classList.toggle('on', Boolean(text || error));
+          if (bubbleTimer) clearTimeout(bubbleTimer);
+          if (text || error) {
+            bubbleTimer = setTimeout(() => bubble.classList.remove('on'), BUBBLE_MS);
+          }
+        }
+
+        function render(presence, advice) {
+          playing = Boolean(presence && presence.playing);
+          root.hidden = false;
+          // 没在说话就退回待机动画（不再显示游戏名小字标题）
+          if (!bubble.classList.contains('on')) loadAnimation(IDLE_ANIMATION);
+          if (advice && advice.animation && advice.animation !== animation) {
+            loadAnimation(advice.animation);
+          }
+        }
+
+        function flatten(sections) {
+          const flat = {};
+          for (const key of Object.keys(sections || {})) flat[key] = sections[key]?.counter ?? 0;
+          return flat;
+        }
+        function changed(sections, base) {
+          for (const key of Object.keys(sections || {})) {
+            if ((sections[key]?.counter ?? 0) !== (base[key] ?? 0)) return true;
+          }
+          return false;
+        }
+
+        async function tick() {
+          let payload = null;
+          try {
+            const response = await fetch(`${ROUTE}/state`, { cache: 'no-store' });
+            if (response.ok) payload = await response.json();
+          } catch {
+            payload = null;
+          }
+          const sections = payload?.sections ?? {};
+          const presence = sections.presence?.data ?? { playing: false };
+          const advice = sections.advice?.data;
+          const lastError = sections.lastError?.data;
+          const pet = sections.pet?.data;
+
+          // 第一次拿到 bundled 清单时重排一次素材（避免"卡一下才出小人"）
+          if (pet && Array.isArray(pet.bundled) && bundled === null) {
+            bundled = pet.bundled;
+            sourceIndex = 0;
+            applySource();
+          }
+
+          if (baseline === null) {
+            baseline = flatten(sections);
+            render(presence, advice);
+            if (advice) showBubble(advice);
+            schedule(presence.playing);
+            return;
+          }
+          if (changed(sections, baseline)) {
+            baseline = flatten(sections);
+            render(presence, advice);
+            if (advice && advice.say) showBubble(advice);
+            else if (lastError && lastError.message) showBubble({ error: lastError.message });
+          } else {
+            render(presence, advice);
+          }
+          schedule(presence.playing);
+        }
+
+        function schedule(isPlaying) {
+          setTimeout(() => void tick(), isPlaying ? 1000 : 3000);
+        }
+
+        loadAnimation(IDLE_ANIMATION);
+        root.hidden = false;
+        void tick();
+      })();
+    </script>
+  </body>
+</html>

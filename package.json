@@ -1,0 +1,71 @@
+{
+  "name": "dsh-game-pet",
+  "version": "0.1.0",
+  "description": "打游戏时自动开口的小鲸鱼娘：认出你在玩哪款游戏，结合画面局势给建议，全程零点击。复用 dsh-pet 的动画素材，住在一个透明置顶小窗里。",
+  "type": "module",
+  "license": "MIT",
+  "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bigk5780/dsh.git"
+  },
+  "homepage": "https://github.com/bigk5780/dsh#readme",
+  "bugs": {
+    "url": "https://github.com/bigk5780/dsh/issues"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "src",
+    "runtime/overlay",
+    "assets/webm",
+    "assets/screenshot-1.png",
+    "screenshots.json",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "game",
+    "game-companion",
+    "desktop-pet",
+    "vision",
+    "floating-widget",
+    "wallpaper-engine",
+    "cordis"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": "^0.2.0-rc.2"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.2.0-rc.2": "compatible"
+      }
+    }
+  }
+}

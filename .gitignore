@@ -1,0 +1,15 @@
+# 本机运行期文件（插件自己写的、不属于源码）
+dsh-game-pet.json
+dsh-game-pet.log
+dsh-game-pet-window.json
+dsh-game-pet-window.log
+
+# 依赖与构建产物
+node_modules/
+*.tgz
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

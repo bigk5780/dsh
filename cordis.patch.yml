@@ -1,0 +1,12 @@
+# dsh-game-pet bundle layer —— 有意留空。
+#
+# 为什么是空的：这个包已经由 profile 自己的 cordis.patch.yml 用一行 insert 挂载
+# （name: 'dsh-game-pet'，并带上 config）。如果这里再 insert 一行同 id 的，
+# 配置树里就会出现两条同 id 的 entry，宿主**整行都不会挂上**（实测：插件静默失效、
+# 路由一条都没注册、页面毫无反应）。
+#
+# 所以规则是二选一：
+#   A) profile 的 cordis.patch.yml 挂载（当前用法，方便在每个 profile 里带自己的 config）
+#   B) 本文件 insert 一行（把包当标准 bundle 用，config 取默认值）
+# 两者只能有一个。本包选了 A，所以这里保持空数组。
+[]
